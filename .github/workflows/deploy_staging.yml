@@ -1,0 +1,67 @@
+name: Deploy to Staging
+
+on:
+  workflow_call:
+    inputs:
+      build_directory:
+        required: true
+        type: string
+      docker_repo_name:
+        required: true
+        type: string
+      dist_version_prefix:
+        required: true
+        type: string
+      tag_version:
+        required: true
+        type: string
+      build_args:
+        required: false
+        type: string
+    secrets:
+      dockerhub_key:
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Docker build and push
+        run: |
+          IMAGE_NAME="${{ inputs.docker_repo_name }}:${{ inputs.tag_version }}"
+          SHA_IMAGE_NAME="${{ inputs.docker_repo_name }}:git-${{ github.sha }}"
+
+          cd "${{ inputs.build_directory }}" && \
+          docker build --build-arg ${inputs.build_args} \
+          -t "${IMAGE_NAME}" \
+          .
+          docker tag "${IMAGE_NAME}" "${SHA_IMAGE_NAME}"
+
+          echo "${{ secrets.dockerhub_key }}" | docker login --username ${{ github.repository_owner }} --password-stdin
+          docker push "${IMAGE_NAME}"
+          docker push "${SHA_IMAGE_NAME}"
+
+      - name: Generate Date and Build Version Tag
+        id: versioning
+        run: |
+          DATE=$(date +'%Y-%m-%d')
+          BUILD_NUMBER="${{ github.run_id }}-${{ github.run_number }}-${{ github.run_attempt }}"
+          DIST_VERSION="${{ inputs.dist_version_prefix }}-${DATE}-${BUILD_NUMBER}"
+          echo "DIST_VERSION=${DIST_VERSION}" >> $GITHUB_ENV
+          echo "::set-output name=dist_version::$DIST_VERSION"
+
+      - name: Create Tag
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const distVersion = process.env.DIST_VERSION;
+            github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: `refs/tags/${distVersion}`,
+                sha: context.sha
+            })
